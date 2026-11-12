@@ -537,7 +537,7 @@ jobs:
           sub(E/"UnrealTournament/CMakeLists.txt", "if(ANDROID)\n  add_library(${PROJECT_NAME} SHARED ${SRC_FILES})",
               "if(IOS)\n  add_library(${PROJECT_NAME} STATIC ${SRC_FILES})\nelseif(ANDROID)\n  add_library(${PROJECT_NAME} SHARED ${SRC_FILES})")
           sub(E/"UnrealTournament/CMakeLists.txt", "    target_link_libraries(${PROJECT_NAME} -Wl,--whole-archive ${LINK_PACKAGES} -Wl,--no-whole-archive)",
-              "    if(IOS)\n      target_link_libraries(${PROJECT_NAME} PUBLIC ${LINK_PACKAGES})\n    else()\n      target_link_libraries(${PROJECT_NAME} -Wl,--whole-archive ${LINK_PACKAGES} -Wl,--no-whole-archive)\n    endif()")
+              "    if(IOS)\n      target_link_libraries(${PROJECT_NAME} ${LINK_PACKAGES})\n    else()\n      target_link_libraries(${PROJECT_NAME} -Wl,--whole-archive ${LINK_PACKAGES} -Wl,--no-whole-archive)\n    endif()")
 
           # ---------------------------------------------------------------- 3. Core / misc Darwin fixes
           sub(E/"Core/Src/UnGUID.cpp", r'\buuid_t\b', 'ue_uuid_t', rx=True, must=False)
