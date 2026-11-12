@@ -422,6 +422,10 @@ jobs:
           #include <stdarg.h>
           #include <stdio.h>
           #include <stdint.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <time.h>
+          #include <sys/time.h>
 
           #define JNIEXPORT
           #define JNICALL
@@ -546,7 +550,6 @@ jobs:
           # iOS < 10 has no clock_gettime()
           sub(E/"Core/Inc/UT99LoadProfiler.h", "clock_gettime(CLOCK_MONOTONIC, &Ts);",
               "{ struct timeval UeTv; gettimeofday(&UeTv, 0); Ts.tv_sec = UeTv.tv_sec; Ts.tv_nsec = UeTv.tv_usec * 1000; }", must=False)
-          sub(E/"Core/Inc/UT99LoadProfiler.h", "#include", "#include <sys/time.h>\n#include", count=1, must=False)
           # Apple's pthread_setname_np takes 1 arg
           for f in (E/"Core/Src/UnThread.cpp",):
               if f.exists(): sub(f, "#include \"CorePrivate.h\"", "#include \"CorePrivate.h\"\n#if defined(__APPLE__)\n#undef pthread_setname_np\n#define pthread_setname_np(t, n) do { } while(0)\n#endif", count=1, must=False)
@@ -704,6 +707,10 @@ jobs:
               sub(SDL/"CMakeLists.txt", "      file(GLOB JOYSTICK_SOURCES ${SDL2_SOURCE_DIR}/src/joystick/steam/*.c)\n      set(SDL_JOYSTICK_MFI 1)\n",
                   "      file(GLOB JOYSTICK_SOURCES ${SDL2_SOURCE_DIR}/src/joystick/steam/*.c ${SDL2_SOURCE_DIR}/src/joystick/dummy/*.c)\n      set(SDL_JOYSTICK_DUMMY 1)\n      set(MFI_JOYSTICK_SOURCES \"\")\n")
               sub(SDL/"CMakeLists.txt", "Coremotion", "CoreMotion", must=False)
+              # CoreAudio: AVAudioSession options/mode API is newer than the 9.3 SDK -> numeric values + the old setCategory:error:
+              CA = SDL/"src/audio/coreaudio/SDL_coreaudio.m"
+              sub(CA, "AVAudioSessionCategoryOptionAllowBluetoothA2DP |\n                       AVAudioSessionCategoryOptionAllowAirPlay;", "0x20 /* A2DP */ | 0x40 /* AirPlay */;")
+              sub(CA, "[session setCategory:category mode:mode options:options error:&err]", "[session setCategory:category error:&err]")
           else:
               problems.append("SDL2 tree missing")
 
