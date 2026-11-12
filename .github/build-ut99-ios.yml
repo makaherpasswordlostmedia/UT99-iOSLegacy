@@ -1,0 +1,806 @@
+name: Build Unreal Tournament 99 (iOS armv7, iOS 7+)
+on: workflow_dispatch
+permissions: { contents: read }
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage sources (repo ut99dc + SDL2 2.32.10 + libxmp) and unpack the iOS host payload
+        run: |
+          set -euo pipefail
+          test -d third_party/ut99dc/Source
+          test -d app/src/main/cpp/android_glad_compat
+          mkdir -p engine build_deps ios/cmake ios/scripts ios/shim/android
+          cp -r third_party/ut99dc/Source engine/Source
+          cp -r app/src/main/cpp/android_glad_compat android_glad_compat
+          cp -r app/src/main/cpp/android_glm_compat android_glm_compat
+          curl -fsSL https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz | tar -xz -C build_deps
+          mv build_deps/SDL2-2.32.10 build_deps/SDL2
+          git clone --depth 1 --branch libxmp-4.6.3 https://github.com/libxmp/libxmp.git build_deps/libxmp || git clone --depth 1 https://github.com/libxmp/libxmp.git build_deps/libxmp
+          test -f build_deps/libxmp/CMakeLists.txt
+          base64 -d > /tmp/ios-payload.tar.xz <<'EOF_PAYLOAD'
+          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
+          EOF_PAYLOAD
+          tar -xJf /tmp/ios-payload.tar.xz
+          test -f ios/host/UE1IOSHost.mm
+      - name: Generate build files and compat shims (edit THIS yml to change the build)
+        run: |
+          set -euo pipefail
+          cat > ios/cmake/ios-armv7-toolchain.cmake <<'EOF_TC'
+          # Toolchain: iOS armv7 (min iOS 7.0) cross-compiled from Linux (Theos LLVM toolchain + iPhoneOS 9.3 SDK).
+          set(CMAKE_SYSTEM_NAME Darwin)
+          set(IOS TRUE)
+          set(CMAKE_SYSTEM_PROCESSOR armv7)
+          set(CMAKE_OSX_ARCHITECTURES armv7 CACHE STRING "" FORCE)
+          if(NOT IOS_TOOLCHAIN_BIN)
+            if(DEFINED ENV{IOS_TOOLCHAIN_BIN})
+              set(IOS_TOOLCHAIN_BIN $ENV{IOS_TOOLCHAIN_BIN})
+            elseif(DEFINED ENV{THEOS})
+              set(IOS_TOOLCHAIN_BIN $ENV{THEOS}/toolchain/linux/iphone/bin)
+            endif()
+          endif()
+          if(NOT IOS_SDK)
+            if(DEFINED ENV{IOS_SDK})
+              set(IOS_SDK $ENV{IOS_SDK})
+            elseif(DEFINED ENV{THEOS})
+              set(IOS_SDK $ENV{THEOS}/sdks/iPhoneOS9.3.sdk)
+            endif()
+          endif()
+          if(NOT IOS_TOOLCHAIN_BIN OR NOT IOS_SDK)
+            message(FATAL_ERROR "Set THEOS, or IOS_TOOLCHAIN_BIN and IOS_SDK")
+          endif()
+          set(CMAKE_SYSROOT ${IOS_SDK})
+          set(CMAKE_OSX_SYSROOT ${IOS_SDK} CACHE PATH "" FORCE)
+          set(CMAKE_C_COMPILER   ${IOS_TOOLCHAIN_BIN}/clang)
+          set(CMAKE_CXX_COMPILER ${IOS_TOOLCHAIN_BIN}/clang++)
+          set(CMAKE_OBJC_COMPILER   ${IOS_TOOLCHAIN_BIN}/clang)
+          set(CMAKE_OBJCXX_COMPILER ${IOS_TOOLCHAIN_BIN}/clang++)
+          foreach(L C CXX OBJC OBJCXX)
+            set(CMAKE_${L}_COMPILER_WORKS TRUE)
+            set(CMAKE_${L}_COMPILER_TARGET armv7-apple-ios7.0)
+          endforeach()
+          find_program(IOS_AR     NAMES llvm-ar ar         HINTS ${IOS_TOOLCHAIN_BIN} NO_DEFAULT_PATH)
+          find_program(IOS_RANLIB NAMES llvm-ranlib ranlib HINTS ${IOS_TOOLCHAIN_BIN} NO_DEFAULT_PATH)
+          find_program(IOS_AR     NAMES llvm-ar ar)
+          find_program(IOS_RANLIB NAMES llvm-ranlib ranlib)
+          set(CMAKE_AR ${IOS_AR} CACHE FILEPATH "" FORCE)
+          set(CMAKE_RANLIB ${IOS_RANLIB} CACHE FILEPATH "" FORCE)
+          if(DEFINED ENV{IOS_LD})
+            set(_ld "-fuse-ld=$ENV{IOS_LD}")
+          endif()
+          set(_common "-arch armv7 -miphoneos-version-min=7.0 -isysroot ${IOS_SDK} -fno-modules -fno-implicit-modules -fno-implicit-module-maps -Wno-deprecated-declarations -Wno-error")
+          set(CMAKE_C_FLAGS_INIT   "${_common}")
+          set(_cxxinc "")
+          if(EXISTS ${IOS_SDK}/usr/include/c++/v1)
+            set(_cxxinc "-nostdinc++ -isystem ${IOS_SDK}/usr/include/c++/v1")
+          endif()
+          set(CMAKE_CXX_FLAGS_INIT "${_common} -stdlib=libc++ ${_cxxinc}")
+          set(CMAKE_OBJC_FLAGS_INIT   "${_common}")
+          set(CMAKE_OBJCXX_FLAGS_INIT "${_common} -stdlib=libc++ ${_cxxinc}")
+          set(CMAKE_EXE_LINKER_FLAGS_INIT "-arch armv7 -miphoneos-version-min=7.0 -isysroot ${IOS_SDK} ${_ld}")
+          set(CMAKE_USER_MAKE_RULES_OVERRIDE ${CMAKE_CURRENT_LIST_DIR}/ios-rules-override.cmake)
+          set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+          set(CMAKE_FIND_ROOT_PATH ${IOS_SDK})
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          EOF_TC
+          cat > ios/cmake/ios-rules-override.cmake <<'EOF_OV'
+          foreach(L C CXX OBJC OBJCXX)
+            set(CMAKE_${L}_CREATE_STATIC_LIBRARY "<CMAKE_AR> qc <TARGET> <LINK_FLAGS> <OBJECTS>" "<CMAKE_RANLIB> <TARGET>")
+          endforeach()
+          EOF_OV
+          cat > CMakeLists.txt <<'EOF_CM'
+          cmake_minimum_required(VERSION 3.20)
+          project(UT99iOS C CXX OBJC OBJCXX)
+
+          foreach(L C CXX OBJC OBJCXX)
+            set(CMAKE_${L}_CREATE_STATIC_LIBRARY "<CMAKE_AR> qc <TARGET> <LINK_FLAGS> <OBJECTS>" "<CMAKE_RANLIB> <TARGET>")
+          endforeach()
+          set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
+          set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "")
+
+          # ---- SDL2 2.32.10 (UIKit, static, GLES). SDL audio stays ON: UT99's audio core is SDL-based.
+          set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+          set(SDL_STATIC ON  CACHE BOOL "" FORCE)
+          set(SDL_TEST   OFF CACHE BOOL "" FORCE)
+          set(SDL_TESTS  OFF CACHE BOOL "" FORCE)
+          set(SDL_METAL  OFF CACHE BOOL "" FORCE)
+          set(SDL_RENDER_METAL OFF CACHE BOOL "" FORCE)
+          set(SDL_VULKAN OFF CACHE BOOL "" FORCE)
+          set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
+          set(SDL_HIDAPI OFF CACHE BOOL "" FORCE)
+          set(SDL_OPENGLES ON CACHE BOOL "" FORCE)
+          add_subdirectory(build_deps/SDL2 EXCLUDE_FROM_ALL)
+          file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/sdlinc)
+          file(CREATE_LINK ${CMAKE_SOURCE_DIR}/build_deps/SDL2/include ${CMAKE_BINARY_DIR}/sdlinc/SDL2 SYMBOLIC)
+          set(SDL2_INCLUDE_DIR "${CMAKE_BINARY_DIR}/sdlinc;${CMAKE_SOURCE_DIR}/build_deps/SDL2/include" CACHE STRING "" FORCE)
+          set(SDL2_LIBRARY SDL2-static CACHE STRING "" FORCE)
+
+          # ---- libxmp (tracker music, .umx)
+          set(BUILD_STATIC ON CACHE BOOL "" FORCE)
+          set(BUILD_SHARED OFF CACHE BOOL "" FORCE)
+          set(BUILD_LITE OFF CACHE BOOL "" FORCE)
+          set(WITH_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+          add_subdirectory(build_deps/libxmp EXCLUDE_FROM_ALL)
+          set(LIBXMP_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/build_deps/libxmp/include CACHE STRING "" FORCE)
+          add_library(ut99_libxmp INTERFACE)
+          target_link_libraries(ut99_libxmp INTERFACE xmp_static)
+
+          # ---- Engine (ut99dc / UE1 v432-class), patched by ios/patch_ut99.py
+          set(UE1_IOS_CXX_STD 14 CACHE STRING "C++ standard for the engine (SDK libc++ is old; try 17 if code needs it)")
+          add_definitions(-DPLATFORM_IOS -DUNREAL_IOS)
+          include_directories(${CMAKE_SOURCE_DIR}/ios/shim)
+          add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${CMAKE_SOURCE_DIR}/ios/shim/ue_ios_compat.h>")
+          set(USE_SDL ON CACHE BOOL "" FORCE)
+          set(LOW_MEMORY ON CACHE BOOL "" FORCE)
+          set(BUILD_STATIC ON CACHE BOOL "" FORCE)
+          set(BUILD_UNREALTOURNAMENT ON CACHE BOOL "" FORCE)
+          set(BUILD_EDITOR OFF CACHE BOOL "" FORCE)
+          set(BUILD_DCUTIL OFF CACHE BOOL "" FORCE)
+          set(BUILD_NOPENGLDRV OFF CACHE BOOL "" FORCE)
+          set(BUILD_NULLSOUNDDRV OFF CACHE BOOL "" FORCE)
+          set(BUILD_PVRDRV OFF CACHE BOOL "" FORCE)
+          set(BUILD_AICADRV OFF CACHE BOOL "" FORCE)
+          add_subdirectory(engine/Source ue1)
+
+          # ---- Host app (UIKit entry via SDL2main, touch UI, config bootstrap)
+          add_executable(UT99iOS ios/host/UE1IOSHost.mm ios/host/ios_diag.mm ios/host/ios_availability_stub.m)
+          set_source_files_properties(ios/host/UE1IOSHost.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+          target_include_directories(UT99iOS PRIVATE ${SDL2_INCLUDE_DIR})
+          # UE1 packages register themselves via static initializers -> force_load each.
+          set(UE1_LIBS Core Engine Render Audio IpDrv Fire NSDLDrv NOpenGLESDrv UnrealTournament)
+          set(_fl "")
+          foreach(t ${UE1_LIBS})
+            if(TARGET ${t})
+              add_dependencies(UT99iOS ${t})
+              list(APPEND _fl "-Wl,-force_load,$<TARGET_FILE:${t}>")
+            else()
+              message(WARNING "engine target ${t} does not exist")
+            endif()
+          endforeach()
+          target_link_libraries(UT99iOS PRIVATE ${_fl} SDL2main SDL2-static xmp_static
+            "-framework UIKit" "-framework Foundation" "-framework OpenGLES"
+            "-framework QuartzCore" "-framework CoreGraphics" "-framework AudioToolbox"
+            "-framework CoreAudio" "-framework CoreMotion" "-framework CoreFoundation"
+            "-framework AVFoundation" "-framework CoreVideo" "-weak_framework GameController"
+            "-Wl,-dead_strip" c++)
+          set_target_properties(UT99iOS PROPERTIES OUTPUT_NAME UT99iOS)
+          EOF_CM
+          cat > ios/scripts/package_ios.sh <<'EOF_PK'
+          #!/usr/bin/env bash
+          # Usage: package_ios.sh <build-dir> [out-dir]  -> UT99iOS.ipa (ldid fake-signed)
+          set -euo pipefail
+          B="${1:?build dir}"; OUT="${2:-$B/out}"
+          R="$(cd "$(dirname "$0")/.." && pwd)"
+          BIN="$B/UT99iOS"; [ -f "$BIN" ] || { echo "no $BIN"; exit 1; }
+          rm -rf "$OUT/Payload"; APP="$OUT/Payload/UT99iOS.app"; mkdir -p "$APP"
+          cp "$BIN" "$APP/UT99iOS"
+          cp "$R/resources/Info.plist" "$APP/"
+          find "$R/resources" -maxdepth 1 -name '*.png' -exec cp {} "$APP/" \;
+          LDID="${LDID:-$(command -v ldid || ls ${THEOS:-/nonexistent}/toolchain/linux/iphone/bin/ldid 2>/dev/null || true)}"
+          if [ -n "$LDID" ]; then "$LDID" -S"$R/resources/entitlements.plist" "$APP/UT99iOS"; else echo "warning: ldid not found, binary unsigned"; fi
+          (cd "$OUT" && rm -f UT99iOS.ipa && zip -qr UT99iOS.ipa Payload)
+          echo "built $OUT/UT99iOS.ipa"
+          EOF_PK
+          chmod +x ios/scripts/package_ios.sh
+          cat > ios/shim/ue_ios_compat.h <<'EOF_SHIM'
+          // Force-included into every C++ file of the iOS build (-include).
+          // UT99's Android code paths (which iOS reuses: SDL audio, SDL touch, GLES) reference a few Android
+          // APIs (JNI / logcat). On iOS the JNI environment simply does not exist: SDL_AndroidGetJNIEnv() returns
+          // NULL, and every call site already bails out on a NULL env.
+          #ifndef UE_IOS_COMPAT_H
+          #define UE_IOS_COMPAT_H
+          #ifdef __cplusplus
+          #include <stdarg.h>
+          #include <stdio.h>
+          #include <stdint.h>
+
+          #define JNIEXPORT
+          #define JNICALL
+          #define JNI_TRUE  1
+          #define JNI_FALSE 0
+          typedef int32_t  jint;
+          typedef uint8_t  jboolean;
+          typedef float    jfloat;
+          typedef int64_t  jlong;
+          typedef void*    jobject;
+          typedef void*    jclass;
+          typedef void*    jstring;
+          typedef void*    jmethodID;
+          typedef void*    jarray;
+
+          struct JNIEnv_
+          {
+          	jclass     FindClass( const char* ) { return 0; }
+          	jboolean   ExceptionCheck() { return 0; }
+          	void       ExceptionClear() {}
+          	jmethodID  GetStaticMethodID( jclass, const char*, const char* ) { return 0; }
+          	jmethodID  GetMethodID( jclass, const char*, const char* ) { return 0; }
+          	void       CallStaticVoidMethod( jclass, jmethodID, ... ) {}
+          	jboolean   CallStaticBooleanMethod( jclass, jmethodID, ... ) { return 0; }
+          	jint       CallStaticIntMethod( jclass, jmethodID, ... ) { return 0; }
+          	jfloat     CallStaticFloatMethod( jclass, jmethodID, ... ) { return 0; }
+          	void       CallVoidMethod( jobject, jmethodID, ... ) {}
+          	void       DeleteLocalRef( jobject ) {}
+          	jstring    NewStringUTF( const char* ) { return 0; }
+          	const char* GetStringUTFChars( jstring, jboolean* ) { return ""; }
+          	void       ReleaseStringUTFChars( jstring, const char* ) {}
+          };
+          typedef JNIEnv_ JNIEnv;
+
+          static inline void* SDL_AndroidGetJNIEnv( void ) { return 0; }
+          static inline void* SDL_AndroidGetActivity( void ) { return 0; }
+          static inline int   SDL_GetAndroidSDKVersion( void ) { return 0; }
+
+          enum { ANDROID_LOG_UNKNOWN = 0, ANDROID_LOG_DEFAULT, ANDROID_LOG_VERBOSE, ANDROID_LOG_DEBUG, ANDROID_LOG_INFO, ANDROID_LOG_WARN, ANDROID_LOG_ERROR, ANDROID_LOG_FATAL };
+          static inline int __android_log_print( int, const char* Tag, const char* Fmt, ... )
+          {
+          	char B[1024]; va_list A; va_start( A, Fmt ); vsnprintf( B, sizeof(B), Fmt, A ); va_end( A );
+          	fprintf( stderr, "[%s] %s\n", Tag ? Tag : "ut99", B );
+          	return 0;
+          }
+          #endif
+          #endif
+          EOF_SHIM
+          printf '#include "../ue_ios_compat.h"\n' > ios/shim/android/log.h
+          printf '#include "ue_ios_compat.h"\n' > ios/shim/jni.h
+          cat > ios/patch_ut99.py <<'EOF_PY'
+          #!/usr/bin/env python3
+          # Applies all iOS (armv7, iOS 7+) source changes to the UT99 (ut99dc) tree staged in ./engine/Source,
+          # the SDL2 tree in ./build_deps/SDL2 and the glad shim in ./android_glad_compat.
+          # Every patch reports when its anchor was NOT found, so a source update that breaks a patch is visible in the log.
+          import re, sys, pathlib
+          ENC = dict(encoding="utf-8", errors="surrogateescape")
+          E = pathlib.Path("engine/Source")
+          SDL = pathlib.Path("build_deps/SDL2")
+          problems = []
+
+          def rd(p): return pathlib.Path(p).read_text(**ENC)
+          def wr(p, t): pathlib.Path(p).write_text(t, **ENC)
+
+          def sub(path, old, new, count=0, rx=False, must=True, flags=0):
+              p = pathlib.Path(path)
+              if not p.exists():
+                  if must: problems.append(f"missing file {path}")
+                  return 0
+              t = rd(p)
+              if rx: t2, n = re.subn(old, new, t, count=count, flags=flags)
+              else:
+                  n = t.count(old)
+                  if count and n > count: n = count
+                  t2 = t.replace(old, new, count) if count else t.replace(old, new)
+              if n == 0 and must: problems.append(f"anchor not found in {path}: {old[:70]!r}")
+              if t2 != t: wr(p, t2)
+              return n
+
+          # ---------------------------------------------------------------- 1. Android guards -> also true on iOS
+          IOS = "defined(PLATFORM_IOS)"
+          def flip(t):
+              t = re.sub(r'#[ \t]*ifdef[ \t]+(PLATFORM_ANDROID|__ANDROID__|UNREAL_ANDROID)\b', rf'#if defined(\1) || {IOS}', t)
+              t = re.sub(r'#[ \t]*ifndef[ \t]+(PLATFORM_ANDROID|__ANDROID__|UNREAL_ANDROID)\b', rf'#if !defined(\1) && !{IOS}', t)
+              t = re.sub(r'#[ \t]*if[ \t]+PLATFORM_ANDROID\b(?![ \t]*\|\|)', rf'#if PLATFORM_ANDROID || {IOS}', t)
+              t = re.sub(r'(?<![\w(])defined[ \t]*\([ \t]*(PLATFORM_ANDROID|__ANDROID__|UNREAL_ANDROID)[ \t]*\)(?![ \t]*\|\|[ \t]*defined\(PLATFORM_IOS\))', rf'(defined(\1) || {IOS})', t)
+              # Darwin has no <malloc.h>
+              t = re.sub(r'#[ \t]*include[ \t]*<malloc\.h>', '#ifndef __APPLE__\n#include <malloc.h>\n#endif', t)
+              return t
+          skip_dirs = {"Editor", "UnrealEd", "DCUtil", "KOSDrv", "PVRDrv", "AICADrv", "UCC", "UWeb", "IpServer", "Thirdparty"}
+          nfiles = 0
+          for p in E.rglob("*"):
+              if p.suffix.lower() not in (".cpp", ".h", ".inc", ".c") or not p.is_file(): continue
+              if p.relative_to(E).parts[0] in skip_dirs: continue
+              t = rd(p); t2 = flip(t)
+              if t2 != t: wr(p, t2); nfiles += 1
+          print(f"guards flipped in {nfiles} files")
+
+          # ---------------------------------------------------------------- 2. CMake
+          sub(E/"CMakeLists.txt", "list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)", "list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)")
+          sub(E/"CMakeLists.txt", "set(CMAKE_CXX_STANDARD 17)", "if(IOS)\n  set(CMAKE_CXX_STANDARD ${UE1_IOS_CXX_STD})\nelse()\n  set(CMAKE_CXX_STANDARD 17)\nendif()")
+          sub(E/"CMakeLists.txt", "elseif(LOW_MEMORY AND NOT ANDROID)", "elseif(LOW_MEMORY AND NOT ANDROID AND NOT IOS)")
+          # armv7 in the OS X arch detection
+          sub(E/"cmake/TargetArch.cmake", '            elseif("${osx_arch}" STREQUAL "arm64")\n                set(osx_arch_arm64 TRUE)\n',
+              '            elseif("${osx_arch}" STREQUAL "arm64")\n                set(osx_arch_arm64 TRUE)\n            elseif("${osx_arch}" STREQUAL "armv7")\n                set(osx_arch_armv7 TRUE)\n')
+          sub(E/"cmake/TargetArch.cmake", '        if(osx_arch_arm64)\n            list(APPEND ARCH arm64)\n        endif()\n',
+              '        if(osx_arch_arm64)\n            list(APPEND ARCH arm64)\n        endif()\n\n        if(osx_arch_armv7)\n            list(APPEND ARCH armv7)\n        endif()\n')
+          # GLES: use the Android glad/glm shims (GLES2 symbols are linked directly)
+          sub(E/"NOpenGLESDrv/CMakeLists.txt", "if(ANDROID)\n  set(ANDROID_GLAD_COMPAT_DIR", "if(ANDROID OR IOS)\n  set(ANDROID_GLAD_COMPAT_DIR", count=1)
+          # Audio: SDL audio + libxmp (alias target ut99_libxmp is created by the top-level CMakeLists)
+          sub(E/"Audio/CMakeLists.txt", "if(ANDROID)\n  target_include_directories", "if(ANDROID OR IOS)\n  target_include_directories", count=1)
+          # Launcher: static library on iOS (the host executable force-loads every package)
+          sub(E/"UnrealTournament/CMakeLists.txt", "if(ANDROID)\n  add_library(${PROJECT_NAME} SHARED ${SRC_FILES})",
+              "if(IOS)\n  add_library(${PROJECT_NAME} STATIC ${SRC_FILES})\nelseif(ANDROID)\n  add_library(${PROJECT_NAME} SHARED ${SRC_FILES})")
+          sub(E/"UnrealTournament/CMakeLists.txt", "    target_link_libraries(${PROJECT_NAME} -Wl,--whole-archive ${LINK_PACKAGES} -Wl,--no-whole-archive)",
+              "    if(IOS)\n      target_link_libraries(${PROJECT_NAME} PUBLIC ${LINK_PACKAGES})\n    else()\n      target_link_libraries(${PROJECT_NAME} -Wl,--whole-archive ${LINK_PACKAGES} -Wl,--no-whole-archive)\n    endif()")
+
+          # ---------------------------------------------------------------- 3. Core / misc Darwin fixes
+          sub(E/"Core/Src/UnGUID.cpp", r'\buuid_t\b', 'ue_uuid_t', rx=True, must=False)
+          sub(E/"Core/Src/UnGUID.cpp", r'\buuid_create\b', 'ue_uuid_create', rx=True, must=False)
+          sub(E/"Core/Src/UnGUID.cpp", r'\buuid_init\b', 'ue_uuid_init', rx=True, must=False)
+          # iOS < 10 has no clock_gettime()
+          sub(E/"Core/Inc/UT99LoadProfiler.h", "clock_gettime(CLOCK_MONOTONIC, &Ts);",
+              "{ struct timeval UeTv; gettimeofday(&UeTv, 0); Ts.tv_sec = UeTv.tv_sec; Ts.tv_nsec = UeTv.tv_usec * 1000; }", must=False)
+          sub(E/"Core/Inc/UT99LoadProfiler.h", "#include", "#include <sys/time.h>\n#include", count=1, must=False)
+          # Apple's pthread_setname_np takes 1 arg
+          for f in (E/"Core/Src/UnThread.cpp",):
+              if f.exists(): sub(f, "#include \"CorePrivate.h\"", "#include \"CorePrivate.h\"\n#if defined(__APPLE__)\n#undef pthread_setname_np\n#define pthread_setname_np(t, n) do { } while(0)\n#endif", count=1, must=False)
+
+          # ---------------------------------------------------------------- 4. Launcher: data dir bootstrap (Documents/UnrealTournament)
+          BOOT = r'''
+          #ifdef PLATFORM_IOS
+          #include <errno.h>
+          #include <sys/stat.h>
+          #include <unistd.h>
+          // Implemented in ios/host (UE1IOSHost.mm / ios_diag.mm)
+          extern "C" const char* UE1IOSDocumentsDir();
+          extern "C" void UE1IOSLog( const char* Msg );
+          extern "C" void UE1IOSPrepareConfig( const char* SystemDir );
+          static int UT99IOSDirExists( const char* P ) { struct stat St; return stat( P, &St ) == 0 && S_ISDIR( St.st_mode ); }
+          static void UT99IOSEarlyError( const char* Msg )
+          {
+          	UE1IOSLog( Msg );
+          	SDL_ShowSimpleMessageBox( SDL_MESSAGEBOX_ERROR, "Unreal Tournament", Msg, NULL );
+          	exit( 1 );
+          }
+          // Game data lives in <App>/Documents/UnrealTournament/{System,Maps,Textures,Sounds,Music} (iTunes File Sharing / Filza).
+          static void UT99IOSPreInit()
+          {
+          	const char* Docs = UE1IOSDocumentsDir();
+          	if( !Docs || !Docs[0] ) UT99IOSEarlyError( "Could not resolve the app Documents folder." );
+          	static char Root[1024], Sys[1100];
+          	snprintf( Root, sizeof(Root), "%s/UnrealTournament", Docs );
+          	snprintf( Sys, sizeof(Sys), "%s/System", Root );
+          	if( !UT99IOSDirExists( Sys ) )
+          	{
+          		snprintf( Root, sizeof(Root), "%s", Docs );
+          		snprintf( Sys, sizeof(Sys), "%s/System", Root );
+          		if( !UT99IOSDirExists( Sys ) )
+          			UT99IOSEarlyError( "UT99 game data not found.\n\nCopy your Unreal Tournament folders (System, Maps, Textures, Sounds, Music) into the app's Documents/UnrealTournament folder (iTunes File Sharing / Filza)." );
+          	}
+          	setenv( "HOME", Root, 1 );
+          	static char Base[1120]; snprintf( Base, sizeof(Base), "%s/", Sys );
+          	setenv( "UT99_ANDROID_BASEDIR", Base, 1 ); // appBaseDir() honours this variable
+          	if( chdir( Sys ) < 0 ) UT99IOSEarlyError( "Could not chdir into the System folder." );
+          	UE1IOSPrepareConfig( Sys );
+          	UE1IOSLog( "UT99 iOS: data root ready" );
+          }
+          #endif
+          '''
+          n = sub(E/"UnrealTournament/Src/Launch.cpp", r'(\n)(int main\( int argc, char\* argv\[\] \)\n\{)', lambda m: "\n" + BOOT + "\n" + m.group(2) + "\n#ifdef PLATFORM_IOS\n\tUT99IOSPreInit();\n#endif", rx=True, count=1)
+
+          # ---------------------------------------------------------------- 5. NSDLClient: iOS SDL hints
+          sub(E/"NSDLDrv/Src/NSDLClient.cpp", r'([ \t]*if \( SDL_Init\( SDL_INIT_VIDEO)',
+              '#ifdef PLATFORM_IOS\n\tSDL_SetHint( SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0" );\n\tSDL_SetHint( SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight" );\n\tSDL_SetHint( SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1" );\n#endif\n\\1', rx=True, count=1)
+
+          # ---------------------------------------------------------------- 6. NSDLViewport: touch-look / UI-state bridge to the iOS host, window flags
+          VP = E/"NSDLDrv/Src/NSDLViewport.cpp"
+          sub(VP, '#include "NSDLDrv.h"', '''#include "NSDLDrv.h"
+          #ifdef PLATFORM_IOS
+          // Implemented in ios/host (UE1IOSHost.mm)
+          extern "C" void UE1IOSSetUIState( int InMenu, int Typing );
+          // Touch-look deltas (finger points, +Y = finger down) from the UI thread; consumed once per input tick.
+          static SDL_SpinLock GIOSLookLock = 0;
+          static FLOAT GIOSLookX = 0.0f;
+          static FLOAT GIOSLookY = 0.0f;
+          extern "C" void UE1IOSPushLook( float DX, float DY )
+          {
+          	SDL_AtomicLock( &GIOSLookLock );
+          	GIOSLookX += DX;
+          	GIOSLookY += DY;
+          	SDL_AtomicUnlock( &GIOSLookLock );
+          }
+          #endif''', count=1)
+          sub(VP, "    GUT99RetroTouchUiState = UT99RetroTouchDetermineUiState( Viewport, bMenu );\n",
+              "    GUT99RetroTouchUiState = UT99RetroTouchDetermineUiState( Viewport, bMenu );\n#ifdef PLATFORM_IOS\n    UE1IOSSetUIState( bMenu ? 1 : 0, 0 ); // host hides its on-screen pad in menus\n#endif\n", count=1)
+          sub(VP, "    // UT99_ANDROID_CONTROLLER_FULL_REMAP_V120:\n    // Do not additionally inject MouseX/MouseY",
+              '''#ifdef PLATFORM_IOS
+              {
+                  FLOAT LookX, LookY;
+                  SDL_AtomicLock( &GIOSLookLock );
+                  LookX = GIOSLookX; LookY = GIOSLookY;
+                  GIOSLookX = 0.0f; GIOSLookY = 0.0f;
+                  SDL_AtomicUnlock( &GIOSLookLock );
+                  if( LookX != 0.0f || LookY != 0.0f )
+                  {
+                      const FLOAT Dx = Clamp( LookX, -240.0f, 240.0f );
+                      const FLOAT Dy = Clamp( -LookY, -240.0f, 240.0f );
+                      if( Dx != 0.0f ) UT99V47Event( Viewport, IK_MouseX, IST_Axis, Dx );
+                      if( Dy != 0.0f ) UT99V47Event( Viewport, IK_MouseY, IST_Axis, Dy );
+                  }
+              }
+          #endif
+              // UT99_ANDROID_CONTROLLER_FULL_REMAP_V120:
+              // Do not additionally inject MouseX/MouseY''', count=1)
+          sub(VP, 'hWnd = SDL_CreateWindow( "", OpenX, OpenY, NewX, NewY, Flags );',
+              '''#ifdef PLATFORM_IOS
+          \t\t\tFlags |= SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS; // iOS windows are always fullscreen; no HIGHDPI on purpose (A5-class GPUs)
+          #endif
+          \t\t\thWnd = SDL_CreateWindow( "", OpenX, OpenY, NewX, NewY, Flags );''')
+
+          # ---------------------------------------------------------------- 7. NOpenGLESDrv: real renderbuffer size, BGRA upload, GLES log shims
+          GL = E/"NOpenGLESDrv/NOpenGLESDrv.cpp"
+          sub(GL, "IMPLEMENT_CLASS(UNOpenGLESRenderDevice);", '''IMPLEMENT_CLASS(UNOpenGLESRenderDevice);
+          #ifdef PLATFORM_IOS
+          static GLint UE1IOSRealW = 0, UE1IOSRealH = 0; // true size of the on-screen renderbuffer
+          static int UE1IOSGetDrawable( SDL_Window* W, int* OutW, int* OutH )
+          {
+          	static Uint32 LastCheck = 0;
+          	Uint32 Now = SDL_GetTicks();
+          	if( LastCheck == 0 || Now - LastCheck > 250 )
+          	{
+          		LastCheck = Now | 1;
+          		GLint Fbo = 0, Rb = 0, PrevRb = 0, RW = 0, RH = 0;
+          		glGetIntegerv( GL_FRAMEBUFFER_BINDING, &Fbo );
+          		if( Fbo )
+          		{
+          			glGetFramebufferAttachmentParameteriv( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &Rb );
+          			if( Rb )
+          			{
+          				glGetIntegerv( GL_RENDERBUFFER_BINDING, &PrevRb );
+          				glBindRenderbuffer( GL_RENDERBUFFER, (GLuint)Rb );
+          				glGetRenderbufferParameteriv( GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH, &RW );
+          				glGetRenderbufferParameteriv( GL_RENDERBUFFER, GL_RENDERBUFFER_HEIGHT, &RH );
+          				glBindRenderbuffer( GL_RENDERBUFFER, (GLuint)PrevRb );
+          			}
+          		}
+          		if( RW > 0 && RH > 0 && ( RW != UE1IOSRealW || RH != UE1IOSRealH ) )
+          		{
+          			debugf( NAME_Log, "GLES: iOS size change: renderbuffer %ix%i -> %ix%i", (int)UE1IOSRealW, (int)UE1IOSRealH, (int)RW, (int)RH );
+          			UE1IOSRealW = RW; UE1IOSRealH = RH;
+          		}
+          	}
+          	if( UE1IOSRealW > 0 && UE1IOSRealH > 0 ) { *OutW = UE1IOSRealW; *OutH = UE1IOSRealH; return 0; }
+          	return SDL_GL_GetDrawableSize( W, OutW, OutH ), 0;
+          }
+          #define SDL_GL_GetDrawableSize UE1IOSGetDrawable
+          #endif''', count=1)
+          sub(GL, r'glTexImage2D\( GL_TEXTURE_2D, (\w+), UploadFormat,',
+              r'glTexImage2D( GL_TEXTURE_2D, \1, ( UploadFormat == GL_BGRA_EXT && !GLAD_GL_EXT_texture_format_BGRA8888 ) ? (GLint)GL_RGBA : (GLint)UploadFormat,', rx=True, must=False)
+          # glad shim: Apple's GLES headers
+          sub("android_glad_compat/glad.h", "#include <GLES2/gl2.h>\n#include <GLES2/gl2ext.h>",
+              "#ifdef __APPLE__\n#include <OpenGLES/ES2/gl.h>\n#include <OpenGLES/ES2/glext.h>\n#else\n#include <GLES2/gl2.h>\n#include <GLES2/gl2ext.h>\n#endif")
+
+          # ---------------------------------------------------------------- 8. SDL 2.32.10 for iOS 7 / 9.3 SDK (same fixes as the Unreal 98 port)
+          if SDL.exists():
+              sub(SDL/"src/misc/ios/SDL_sysurl.m", "openURL:nsurl options:@{} completionHandler:^(BOOL success) {}", "openURL:nsurl")
+              sub(SDL/"src/video/uikit/SDL_uikitappdelegate.m", "#include <AvailabilityVersions.h>\n", "")
+              sub(SDL/"src/video/uikit/SDL_uikitviewcontroller.m", "[viewcontroller setNeedsUpdateOfHomeIndicatorAutoHidden];", "[viewcontroller performSelector:@selector(setNeedsUpdateOfHomeIndicatorAutoHidden)];")
+              sub(SDL/"src/video/uikit/SDL_uikitviewcontroller.m", "[viewcontroller setNeedsUpdateOfScreenEdgesDeferringSystemGestures];", "[viewcontroller performSelector:@selector(setNeedsUpdateOfScreenEdgesDeferringSystemGestures)];")
+              sub(SDL/"src/video/uikit/SDL_uikitviewcontroller.m", "        if (@available(iOS 15.0, tvOS 15.0, *)) {", "#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 150000\n        if (@available(iOS 15.0, tvOS 15.0, *)) {", count=1)
+              sub(SDL/"src/video/uikit/SDL_uikitviewcontroller.m", r'(\n#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 150000\n        if \(@available\(iOS 15\.0, tvOS 15\.0, \*\)\) \{.*?\n        \}\n)', r'\1#endif\n', rx=True, count=1, flags=re.S)
+              sub(SDL/"src/video/uikit/SDL_uikitwindow.m", "scale = windata.uiwindow.screen.nativeScale;", "scale = [windata.uiwindow.screen respondsToSelector:@selector(nativeScale)] ? windata.uiwindow.screen.nativeScale : windata.uiwindow.screen.scale;")
+              sub(SDL/"src/video/uikit/SDL_uikitmodes.m", "float scale = (float)screen.nativeScale;", "float scale = (float)([screen respondsToSelector:@selector(nativeScale)] ? screen.nativeScale : screen.scale);")
+              # no MFi joystick driver (GameController is weak-linked and absent from old iOS): dummy joystick + the symbol uikitview needs
+              sub(SDL/"src/joystick/SDL_joystick.c", "#if (defined(__MACOSX__) || defined(__IPHONEOS__) || defined(__TVOS__)) && !defined(SDL_JOYSTICK_DISABLED)\n    &SDL_IOS_JoystickDriver,\n#endif\n", "")
+              t = rd(SDL/"src/joystick/SDL_joystick.c")
+              if "SDL_AppleTVRemoteOpenedAsJoystick = 0" not in t: wr(SDL/"src/joystick/SDL_joystick.c", t + "\nint SDL_AppleTVRemoteOpenedAsJoystick = 0;\n")
+              sub(SDL/"CMakeLists.txt", "  if(MACOS)\n    set(SDL_FRAMEWORK_COCOA 1)", "  if(MACOS AND NOT IOS)\n    set(SDL_FRAMEWORK_COCOA 1)")
+              sub(SDL/"CMakeLists.txt", "      file(GLOB JOYSTICK_SOURCES ${SDL2_SOURCE_DIR}/src/joystick/steam/*.c)\n      set(SDL_JOYSTICK_MFI 1)\n",
+                  "      file(GLOB JOYSTICK_SOURCES ${SDL2_SOURCE_DIR}/src/joystick/steam/*.c ${SDL2_SOURCE_DIR}/src/joystick/dummy/*.c)\n      set(SDL_JOYSTICK_DUMMY 1)\n      set(MFI_JOYSTICK_SOURCES \"\")\n")
+              sub(SDL/"CMakeLists.txt", "Coremotion", "CoreMotion", must=False)
+          else:
+              problems.append("SDL2 tree missing")
+
+          print("---- patch report ----")
+          for p in problems: print("PROBLEM:", p)
+          print("problems:", len(problems))
+          sys.exit(0)
+          EOF_PY
+          python3 ios/patch_ut99.py 2>&1 | tee build-patch.log
+          ! grep -q '^PROBLEM' build-patch.log
+      - name: Host tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build curl zip unzip xz-utils bzip2 git
+      - name: Theos + toolchain + SDK
+        run: |
+          set -euo pipefail
+          export THEOS="$GITHUB_WORKSPACE/theos"
+          git clone --recursive https://github.com/theos/theos.git "$THEOS"
+          mkdir -p "$THEOS/toolchain/linux/iphone" "$THEOS/sdks"
+          curl -fsSL "https://github.com/L1ghtmann/llvm-project/releases/download/main-update_3-eabca92/iOSToolchain-x86_64.tar.xz" -o /tmp/tc.tar.xz
+          tar -xf /tmp/tc.tar.xz -C "$THEOS/toolchain"
+          curl -fsSL -o /tmp/sdk.tbz2 "https://raw.githubusercontent.com/Sn0wCooder/theos-sdks/master/iPhoneOS9.3.sdk.tbz2"
+          tar -xjf /tmp/sdk.tbz2 -C "$THEOS/sdks"
+          SDK="$THEOS/sdks/iPhoneOS9.3.sdk"
+          for fw in "$SDK"/System/Library/Frameworks/*.framework; do
+            [ -f "$fw/module.map" ] && { mkdir -p "$fw/Modules"; mv "$fw/module.map" "$fw/Modules/module.modulemap"; }
+          done
+          find "$SDK/usr/include" -name module.map | while read -r m; do mv "$m" "$(dirname "$m")/module.modulemap"; done
+          # toolchain's ar/ranlib wrappers call a missing aarch64-apple-darwin14-ranlib -> make it exist
+          TB="$THEOS/toolchain/linux/iphone/bin"
+          for t in ranlib; do
+            [ -e "$TB/aarch64-apple-darwin14-$t" ] || ln -sf "$TB/llvm-$t" "$TB/aarch64-apple-darwin14-$t" 2>/dev/null || true
+          done
+          ls "$TB" | grep -E 'llvm-(ar|ranlib)$|ranlib' || true
+          echo "== libc++ discovery"
+          find "$SDK/usr/include" -maxdepth 2 -iname '*c++*' 2>/dev/null | head
+          find "$THEOS/toolchain" -name '__config_site' 2>/dev/null | head
+          CS="$TB/../include/c++/v1/__config_site"
+          if [ -d "$SDK/usr/include/c++/v1" ]; then echo "SDK libc++ headers: ok"
+          elif [ ! -f "$CS" ]; then
+            FOUND="$(find "$THEOS/toolchain" -name '__config_site' 2>/dev/null | head -n1)"
+            if [ -n "$FOUND" ]; then cp "$FOUND" "$CS"; else
+              echo "no __config_site anywhere; writing one (libc++ 19, Apple, pthread)"
+              cat > "$CS" <<'EOF_CS'
+          #ifndef _LIBCPP_CONFIG_SITE
+          #define _LIBCPP_CONFIG_SITE
+          #define _LIBCPP_ABI_VERSION 1
+          #define _LIBCPP_ABI_NAMESPACE __1
+          #define _LIBCPP_HAS_THREAD_API_PTHREAD 1
+          #define _LIBCPP_HARDENING_MODE_DEFAULT _LIBCPP_HARDENING_MODE_NONE
+          #define _LIBCPP_PSTL_BACKEND_SERIAL 1
+          #endif
+          EOF_CS
+            fi
+          fi
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+      - name: Toolchain sanity (shows the real compiler error)
+        run: |
+          B="$THEOS/toolchain/linux/iphone/bin"; SDK="$THEOS/sdks/iPhoneOS9.3.sdk"
+          ls "$B" | head -50; ls "$SDK" | head
+          printf '#include <fcntl.h>\n#include <pthread.h>\n#include <math.h>\nint main(void){pthread_attr_t t;pthread_attr_init(&t);return (int)tan(1.0)+O_CLOEXEC;}\n' > /tmp/t.c
+          echo "== compile (cmake-style flags)"; "$B/clang" --target=armv7-apple-ios7.0 -arch armv7 -miphoneos-version-min=7.0 -isysroot "$SDK" -fno-modules -c /tmp/t.c -o /tmp/t.o -v || true
+          echo "== archive"; "$B/llvm-ar" qc /tmp/t.a /tmp/t.o && echo archive-ok || true
+          ls -la /tmp/t.o /tmp/t.a || true
+      - name: Configure
+        run: |
+          set -o pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=ios/cmake/ios-armv7-toolchain.cmake 2>&1 | tee build-configure.log || {
+            echo "::group::CMakeError.log"; tail -n 120 build/CMakeFiles/CMakeError.log || true; echo "::endgroup::"
+            cp build/CMakeFiles/CMakeError.log build-cmakeerror.log 2>/dev/null || true
+            exit 1; }
+      - name: Build (keeps going to list ALL errors in one run)
+        run: |
+          set -o pipefail
+          cmake --build build -j"$(nproc)" -- -k 0 2>&1 | tee build-make.log
+      - name: Verify Mach-O
+        run: |
+          file build/UT99iOS || true
+          "$THEOS"/toolchain/linux/iphone/bin/*otool* -hv build/UT99iOS | head || true
+      - name: Package
+        run: ios/scripts/package_ios.sh build build/out
+      - uses: actions/upload-artifact@v4
+        with: { name: UT99-armv7-iOS, path: build/out/UT99iOS.ipa, if-no-files-found: error }
+      - name: Package .deb (jailbreak, installs to /Applications)
+        run: |
+          set -euo pipefail
+          APP=build/out/Payload/UT99iOS.app
+          D=build/out/deb; rm -rf "$D"; mkdir -p "$D/DEBIAN" "$D/Applications"
+          cp -a "$APP" "$D/Applications/UT99iOS.app"
+          chmod 755 "$D/Applications/UT99iOS.app/UT99iOS"
+          printf 'Package: com.example.ut99.armv7\nName: Unreal Tournament 99\nVersion: 0.1.0\nArchitecture: iphoneos-arm\nDescription: Unreal Tournament 99 (ut99dc / UE1) for iOS armv7\nMaintainer: ut99-ios\nAuthor: ut99-ios\nSection: Games\nDepends: firmware (>= 7.0)\n' > "$D/DEBIAN/control"
+          printf '#!/bin/sh\n(uicache -p /Applications/UT99iOS.app || uicache) >/dev/null 2>&1 || true\nexit 0\n' > "$D/DEBIAN/postinst"
+          printf '#!/bin/sh\n(uicache) >/dev/null 2>&1 || true\nexit 0\n' > "$D/DEBIAN/postrm"
+          chmod 755 "$D/DEBIAN/postinst" "$D/DEBIAN/postrm"
+          dpkg-deb --root-owner-group -Zgzip -b "$D" build/out/UT99iOS_0.1.0_iphoneos-arm.deb
+          dpkg-deb -I build/out/UT99iOS_0.1.0_iphoneos-arm.deb
+      - uses: actions/upload-artifact@v4
+        with: { name: UT99-armv7-iOS-deb, path: build/out/UT99iOS_0.1.0_iphoneos-arm.deb, if-no-files-found: error }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: build-logs, path: "build-*.log", if-no-files-found: ignore }
