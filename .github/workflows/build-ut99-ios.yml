@@ -310,6 +310,7 @@ jobs:
           //   [sdl]    SDL_Log messages, with category + priority names
           //   [life]   app lifecycle + memory warnings (the usual reason an old iPad silently dies while loading)
           //   [hb]     heartbeat: silent time, CPU %, resident memory, main-loop liveness and a hang/busy verdict
+          //   [hang]   when silent >= 10 s: 3 samples of the main thread's call stack (function+offset) = where it is stuck
           //   [CRASH]  fatal signals / uncaught exceptions / std::terminate, with backtrace and the last log line
           //
           // Session handling:
@@ -341,6 +342,7 @@ jobs:
           #ifdef __APPLE__
           #include <mach/mach.h>
           #include <sys/sysctl.h>
+          #include <dlfcn.h>
           #endif
           #ifndef __APPLE__
           #define strlcpy( D, S, N ) ( snprintf( (D), (N), "%s", (S) ) )
@@ -547,6 +549,50 @@ jobs:
           }
           #endif
 
+          // BEGIN-SAMPLER
+          // Hang locator: while the process is silent the heartbeat thread peeks at the MAIN thread's registers and frame chain
+          // (armv7: r7 = frame pointer) and logs "function+offset" for each frame -> shows exactly where appInit/InitEngine is stuck.
+          // Only raw addresses are collected while the thread is suspended (no malloc / locks / logging), symbolication happens after resume.
+          #if defined(__APPLE__) && defined(__arm__)
+          #define UE_CAN_SAMPLE 1
+          static mach_port_t GMainThread = MACH_PORT_NULL;
+          static int SampleMainThread( uintptr_t* Out, int Max )
+          {
+          	if( GMainThread == MACH_PORT_NULL || Max < 4 ) return 0;
+          	int N = 0;
+          	if( thread_suspend( GMainThread ) != KERN_SUCCESS ) return 0;
+          	arm_thread_state_t S; mach_msg_type_number_t C = ARM_THREAD_STATE_COUNT;
+          	if( thread_get_state( GMainThread, ARM_THREAD_STATE, (thread_state_t)&S, &C ) == KERN_SUCCESS )
+          	{
+          		Out[N++] = (uintptr_t)S.__pc;
+          		if( S.__lr ) Out[N++] = (uintptr_t)S.__lr;
+          		uintptr_t Fp = (uintptr_t)S.__r[7];
+          		for( int i = 0; i < 24 && N < Max && Fp && !( Fp & 3 ); i++ )
+          		{
+          			uintptr_t Frame[2]; vm_size_t Got = 0;
+          			if( vm_read_overwrite( mach_task_self(), (vm_address_t)Fp, sizeof(Frame), (vm_address_t)Frame, &Got ) != KERN_SUCCESS || Got != sizeof(Frame) ) break;
+          			if( Frame[1] ) Out[N++] = Frame[1];
+          			if( Frame[0] <= Fp ) break;
+          			Fp = Frame[0];
+          		}
+          	}
+          	thread_resume( GMainThread );
+          	return N;
+          }
+          static void DescribeAddr( uintptr_t A, char* B, size_t Cap )
+          {
+          	Dl_info I;
+          	if( dladdr( (void*)A, &I ) && I.dli_fname )
+          	{
+          		const char* Img = strrchr( I.dli_fname, '/' ); Img = Img ? Img + 1 : I.dli_fname;
+          		if( I.dli_sname ) snprintf( B, Cap, "%s+%lu (%s)", I.dli_sname, (unsigned long)( A - (uintptr_t)I.dli_saddr ), Img );
+          		else              snprintf( B, Cap, "%s+0x%lx", Img, (unsigned long)( A - (uintptr_t)I.dli_fbase ) );
+          	}
+          	else snprintf( B, Cap, "0x%lx", (unsigned long)A );
+          }
+          #endif
+          // END-SAMPLER
+
           static void* HeartbeatThread( void* )
           {
           	double PrevAt = NowSec(), PrevCpu = CpuSeconds();
@@ -573,6 +619,25 @@ jobs:
           		snprintf( B, sizeof(B), "+%ds | silent %.0fs | cpu %d%% | mem %uMB | main-loop pumped %s | %s | last: %s",
           			(int)( Now - GStart ), Silent, CpuPct, ResidentMB(), Pump, Verdict, Last );
           		LogLine( "hb", B, false );
+          #ifdef UE_CAN_SAMPLE
+          		static int Samples = 0;
+          		if( Silent >= 10.0 && Samples < 10 )
+          		{
+          			Samples++;
+          			for( int s = 0; s < 3; s++ )
+          			{
+          				uintptr_t Pc[40]; const int N = SampleMainThread( Pc, 40 );
+          				char Buf[1200]; size_t O = (size_t)snprintf( Buf, sizeof(Buf), "main thread sample %d (%d frames):", s + 1, N );
+          				for( int i = 0; i < N && i < 12 && O + 200 < sizeof(Buf); i++ )
+          				{
+          					char D[160]; DescribeAddr( Pc[i], D, sizeof(D) );
+          					O += (size_t)snprintf( Buf + O, sizeof(Buf) - O, " %s%s", i ? "<- " : "", D );
+          				}
+          				LogLine( "hang", Buf, false );
+          				usleep( 300000 );
+          			}
+          		}
+          #endif
           #ifdef __OBJC__
           		// The main queue only runs while the main thread pumps its run loop (SDL_PumpEvents), i.e. once the engine is in its main loop.
           		dispatch_async( dispatch_get_main_queue(), ^{ GMainPumpAt = NowSec(); } );
@@ -644,6 +709,9 @@ jobs:
           __attribute__((constructor)) static void UE1IOSDiagInit( void )
           {
           	GStart = NowSec();
+          #ifdef UE_CAN_SAMPLE
+          	GMainThread = mach_thread_self(); // image initializers run on the main thread
+          #endif
           #ifdef __OBJC__
           	@autoreleasepool
           	{
@@ -1046,6 +1114,18 @@ jobs:
               '#ifdef PLATFORM_IOS\nextern "C" void UE1IOSLogTagged( const char* Tag, const char* Msg );\n#endif\nclass FOutputDeviceFile : public FOutputDevice\n{', count=1)
           sub(FOD, "\t\t\t\tif( GLogHook )\n\t\t\t\t\tGLogHook->Serialize( Data, Event );",
               '#if defined(PLATFORM_IOS) && !UNICODE\n\t\t\t\tif( Event!=NAME_Title )\n\t\t\t\t{\n\t\t\t\t\tchar Msg[1200]; snprintf( Msg, sizeof(Msg), "%s: %s", FName::SafeString(Event), Data ? Data : "" );\n\t\t\t\t\tUE1IOSLogTagged( "engine", Msg );\n\t\t\t\t}\n#endif\n\t\t\t\tif( GLogHook )\n\t\t\t\t\tGLogHook->Serialize( Data, Event );', count=1)
+
+          # ---------------------------------------------------------------- 4c. appInit checkpoints -> ut99_ios.log (tag "init")
+          # The first iPad log stopped at "before appInit" with CPU busy and 11 MB resident: a spin inside appInit.
+          UM = E/"Core/Src/UnMisc.cpp"
+          def ck(anchor, msg):
+              sub(UM, anchor, anchor + '\n#ifdef PLATFORM_IOS\n\tUE1IOSLogTagged( "init", "' + msg + '" );\n#endif', count=1)
+          ck("\tguard(appInit);\n", "appInit: entered")
+          ck("\tGMalloc->Init();\n", "appInit: allocator ready")
+          ck("\tFName::StaticInit();\n", "appInit: FName::StaticInit done")
+          ck("\tGFileManager->SetDefaultDirectory( appBaseDir() );\n", "appInit: cwd set to base dir")
+          ck("\tGConfig->Init( GIni, GUserIni, RequireConfig );\n", "appInit: config loaded")
+          ck("\tUObject::StaticInit();\n", "appInit: UObject::StaticInit done")
 
           # ---------------------------------------------------------------- 5. NSDLClient: iOS SDL hints
           sub(E/"NSDLDrv/Src/NSDLClient.cpp", r'([ \t]*if \( SDL_Init\( SDL_INIT_VIDEO)',
