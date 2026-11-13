@@ -1209,6 +1209,17 @@ jobs:
           sub(FOD, "\t\t\t\tif( GLogHook )\n\t\t\t\t\tGLogHook->Serialize( Data, Event );",
               '#if defined(PLATFORM_IOS) && !UNICODE\n\t\t\t\tif( Event!=NAME_Title )\n\t\t\t\t{\n\t\t\t\t\tchar Msg[1200]; snprintf( Msg, sizeof(Msg), "%s: %s", FName::SafeString(Event), Data ? Data : "" );\n\t\t\t\t\tUE1IOSLogTagged( "engine", Msg );\n\t\t\t\t}\n#endif\n\t\t\t\tif( GLogHook )\n\t\t\t\t\tGLogHook->Serialize( Data, Event );', count=1)
 
+          # ---------------------------------------------------------------- 4d. FIX: stack/global overflow of GModule (the real "hang")
+          # Launch.cpp does appStrcpy( GModule, argv[0] ) into ANSICHAR GModule[32]. On iOS argv[0] is the full bundle path
+          # (/var/containers/Bundle/Application/<UUID>/UT99iOS.app/UT99iOS, ~90 chars), so it overran into neighbouring globals and
+          # overwrote the vptr of the global FMallocAnsi object with path bytes ("7757" from the UUID). GMalloc->Init() then jumped to
+          # garbage -> SIGSEGV -> (old, unsafe) crash handler spun. appPackage() returns GModule and names the log/ini, and it is copied
+          # again into THIS_PACKAGE[64], so it must be a short package name, not a path.
+          sub(E/"Core/Inc/UnGnuG.h", "extern ANSICHAR GModule[32];", "extern ANSICHAR GModule[256];", count=1)
+          sub(E/"Core/Src/UnUnix.cpp", "ANSICHAR GModule[32];", "ANSICHAR GModule[256];", count=1)
+          sub(E/"UnrealTournament/Src/Launch.cpp", "\tappStrcpy( GModule, argv[0] );\n",
+              "#if defined(PLATFORM_IOS)\n\t// argv[0] is the whole bundle path on iOS; the engine uses GModule as the package name (log/ini names).\n\tappStrncpy( GModule, \"UnrealTournament\", (INT)sizeof(GModule) );\n#else\n\tappStrncpy( GModule, argv[0], (INT)sizeof(GModule) );\n#endif\n", count=1)
+
           # ---------------------------------------------------------------- 4c. statement-level trace of the engine start-up -> ut99_ios.log (tag "init")
           # The first iPad logs stopped inside appInit (CPU busy, 11 MB resident). Instead of guessing, EVERY top-level statement of
           # appInit / FName::StaticInit / UObject::StaticInit / UObject::ProcessRegistrants now logs "<func>> <statement>" after it ran,
