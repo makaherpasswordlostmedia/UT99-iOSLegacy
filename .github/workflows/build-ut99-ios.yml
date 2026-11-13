@@ -343,6 +343,8 @@ jobs:
           #include <mach/mach.h>
           #include <sys/sysctl.h>
           #include <dlfcn.h>
+          #include <mach-o/dyld.h>
+          #include <sys/ucontext.h>
           #endif
           #ifndef __APPLE__
           #define strlcpy( D, S, N ) ( snprintf( (D), (N), "%s", (S) ) )
@@ -479,18 +481,90 @@ jobs:
           	close( Fd );
           }
 
-          static void CrashHandler( int Sig, siginfo_t* Si, void* )
+          // ---- Crash handler: strictly async-signal-safe (no snprintf/strsignal/backtrace/malloc: the previous version hung INSIDE the
+          // handler and the crash report was never written). It prints signal, fault address and the registers of the crashed
+          // code straight from the signal context, then asks the heartbeat thread to symbolize the stack (dladdr is not signal-safe).
+          static volatile unsigned long GCrashPcs[20];
+          static volatile int GCrashN = 0;
+          static volatile int GCrashState = 0; // 0 idle, 1 = heartbeat thread please symbolize, 2 = done
+
+          static char* PutS( char* P, const char* S ) { while( *S ) *P++ = *S++; return P; }
+          static char* PutHex( char* P, unsigned long V )
           {
-          	MarkerWrite( "crash" ); // open/write/close are async-signal-safe; the rest below is best effort
-          	char B[500];
-          	snprintf( B, sizeof(B), "\n*** CRASH: signal %d (%s) fault addr=%p | pid=%d uptime=%.1fs mem=%uMB\n*** last log line: %s\n",
-          		Sig, strsignal( Sig ), Si ? Si->si_addr : NULL, (int)getpid(), NowSec() - GStart, ResidentMB(), GLast );
+          	*P++ = '0'; *P++ = 'x'; int Started = 0;
+          	for( int i = (int)sizeof(V) * 8 - 4; i >= 0; i -= 4 )
+          	{ unsigned D = (unsigned)( ( V >> i ) & 15 ); if( D || Started || i == 0 ) { *P++ = "0123456789abcdef"[D]; Started = 1; } }
+          	return P;
+          }
+          static char* PutDec( char* P, long V )
+          {
+          	char T[24]; int N = 0; unsigned long U = V < 0 ? 0UL - (unsigned long)V : (unsigned long)V;
+          	if( V < 0 ) *P++ = '-';
+          	do { T[N++] = (char)( '0' + U % 10 ); U /= 10; } while( U );
+          	while( N ) *P++ = T[--N];
+          	return P;
+          }
+          static const char* SigName( int S )
+          {
+          	switch( S ) { case SIGSEGV: return "SIGSEGV"; case SIGBUS: return "SIGBUS"; case SIGILL: return "SIGILL";
+          		case SIGABRT: return "SIGABRT"; case SIGFPE: return "SIGFPE"; case SIGTRAP: return "SIGTRAP"; }
+          	return "SIG?";
+          }
+
+          static void CrashHandler( int Sig, siginfo_t* Si, void* Ctx )
+          {
+          	static volatile int Entered = 0;
+          	if( Entered++ ) { RawWrite( "*** CRASH: second fault inside the crash handler - exiting\n" ); _exit( 128 + Sig ); }
+          	MarkerWrite( "crash" );
+          	unsigned long Pc = 0, Lr = 0, Sp = 0, Fp = 0, Cpsr = 0;
+          #if defined(__APPLE__) && defined(__arm__)
+          	if( Ctx )
+          	{
+          		ucontext_t* Uc = (ucontext_t*)Ctx;
+          		if( Uc->uc_mcontext ) { Pc = Uc->uc_mcontext->__ss.__pc; Lr = Uc->uc_mcontext->__ss.__lr; Sp = Uc->uc_mcontext->__ss.__sp; Fp = Uc->uc_mcontext->__ss.__r[7]; Cpsr = Uc->uc_mcontext->__ss.__cpsr; }
+          	}
+          #else
+          	(void)Ctx;
+          #endif
+          	char B[700]; char* P = B;
+          	P = PutS( P, "\n*** CRASH " ); P = PutS( P, SigName( Sig ) ); P = PutS( P, " (" ); P = PutDec( P, Sig );
+          	P = PutS( P, ") code=" ); P = PutDec( P, Si ? Si->si_code : 0 );
+          	P = PutS( P, " fault_addr=" ); P = PutHex( P, Si ? (unsigned long)Si->si_addr : 0 );
+          	P = PutS( P, "\n*** pc=" ); P = PutHex( P, Pc ); P = PutS( P, " lr=" ); P = PutHex( P, Lr );
+          	P = PutS( P, " sp=" ); P = PutHex( P, Sp ); P = PutS( P, " r7=" ); P = PutHex( P, Fp ); P = PutS( P, " cpsr=" ); P = PutHex( P, Cpsr );
+          	P = PutS( P, " pid=" ); P = PutDec( P, (long)getpid() );
+          #ifdef __APPLE__
+          	P = PutS( P, " image_slide=" ); P = PutHex( P, (unsigned long)_dyld_get_image_vmaddr_slide( 0 ) );
+          #endif
+          	P = PutS( P, "\n*** last log line: " );
+          	for( int i = 0; i < 255 && GLast[i]; i++ ) *P++ = ( GLast[i] == '\n' || GLast[i] == '\r' ) ? ' ' : GLast[i];
+          	P = PutS( P, "\n" ); *P = 0;
           	RawWrite( B );
-          	void* Bt[64]; int N = backtrace( Bt, 64 );
-          	if( GFd >= 0 ) backtrace_symbols_fd( Bt, N, GFd );
+
+          	// Raw frames: pc, lr, then the r7 frame chain (read through vm_read_overwrite so a bad pointer cannot fault again).
+          	int N = 0;
+          	if( Pc ) GCrashPcs[N++] = Pc;
+          	if( Lr ) GCrashPcs[N++] = Lr;
+          #if defined(__APPLE__) && defined(__arm__)
+          	for( int i = 0; i < 16 && N < 18 && Fp && !( Fp & 3 ); i++ )
+          	{
+          		unsigned long Frame[2]; vm_size_t Got = 0;
+          		if( vm_read_overwrite( mach_task_self(), (vm_address_t)Fp, sizeof(Frame), (vm_address_t)Frame, &Got ) != KERN_SUCCESS || Got != sizeof(Frame) ) break;
+          		if( Frame[1] ) GCrashPcs[N++] = Frame[1];
+          		if( Frame[0] <= Fp ) break;
+          		Fp = Frame[0];
+          	}
+          #endif
+          	P = B; P = PutS( P, "*** raw frames:" );
+          	for( int i = 0; i < N; i++ ) { P = PutS( P, " " ); P = PutHex( P, GCrashPcs[i] ); }
+          	P = PutS( P, "\n" ); *P = 0;
+          	RawWrite( B );
+
+          	// Ask the heartbeat thread to symbolize (it is not the crashed thread); wait at most 3 s, then die for sure (no spinning).
+          	GCrashN = N; GCrashState = 1;
+          	for( int i = 0; i < 300 && GCrashState != 2; i++ ) usleep( 10000 );
           	RawWrite( "*** end of crash report\n" );
-          	signal( Sig, SIG_DFL );
-          	raise( Sig );
+          	_exit( 128 + Sig );
           }
 
           static void TerminateHandler( void )
@@ -549,6 +623,20 @@ jobs:
           }
           #endif
 
+          #ifdef __APPLE__
+          static void DescribeAddr( uintptr_t A, char* B, size_t Cap )
+          {
+          	Dl_info I;
+          	if( dladdr( (void*)A, &I ) && I.dli_fname )
+          	{
+          		const char* Img = strrchr( I.dli_fname, '/' ); Img = Img ? Img + 1 : I.dli_fname;
+          		if( I.dli_sname ) snprintf( B, Cap, "%s+%lu (%s)", I.dli_sname, (unsigned long)( A - (uintptr_t)I.dli_saddr ), Img );
+          		else              snprintf( B, Cap, "%s+0x%lx", Img, (unsigned long)( A - (uintptr_t)I.dli_fbase ) );
+          	}
+          	else snprintf( B, Cap, "0x%lx", (unsigned long)A );
+          }
+          #endif
+
           // BEGIN-SAMPLER
           // Hang locator: while the process is silent the heartbeat thread peeks at the MAIN thread's registers and frame chain
           // (armv7: r7 = frame pointer) and logs "function+offset" for each frame -> shows exactly where appInit/InitEngine is stuck.
@@ -579,17 +667,6 @@ jobs:
           	thread_resume( GMainThread );
           	return N;
           }
-          static void DescribeAddr( uintptr_t A, char* B, size_t Cap )
-          {
-          	Dl_info I;
-          	if( dladdr( (void*)A, &I ) && I.dli_fname )
-          	{
-          		const char* Img = strrchr( I.dli_fname, '/' ); Img = Img ? Img + 1 : I.dli_fname;
-          		if( I.dli_sname ) snprintf( B, Cap, "%s+%lu (%s)", I.dli_sname, (unsigned long)( A - (uintptr_t)I.dli_saddr ), Img );
-          		else              snprintf( B, Cap, "%s+0x%lx", Img, (unsigned long)( A - (uintptr_t)I.dli_fbase ) );
-          	}
-          	else snprintf( B, Cap, "0x%lx", (unsigned long)A );
-          }
           #endif
           // END-SAMPLER
 
@@ -599,7 +676,24 @@ jobs:
           	for( ;; )
           	{
           		const double Up = NowSec() - GStart;
-          		sleep( Up < 60 ? 5 : 30 );
+          		for( int Tick = 0; Tick < ( Up < 60 ? 50 : 300 ); Tick++ )
+          		{
+          			usleep( 100000 );
+          			if( GCrashState == 1 )
+          			{
+          #ifdef __APPLE__
+          				char Sym[1500]; size_t O = (size_t)snprintf( Sym, sizeof(Sym), "*** crash symbols:" );
+          				for( int i = 0; i < GCrashN && i < 18 && O + 200 < sizeof(Sym); i++ )
+          				{
+          					char D[160]; DescribeAddr( (uintptr_t)GCrashPcs[i], D, sizeof(D) );
+          					O += (size_t)snprintf( Sym + O, sizeof(Sym) - O, " %s%s", i ? "<- " : "", D );
+          				}
+          				if( O < sizeof(Sym) - 2 ) { Sym[O++] = '\n'; Sym[O] = 0; }
+          				RawWrite( Sym );
+          #endif
+          				GCrashState = 2;
+          			}
+          		}
           		const double Now = NowSec(), Cpu = CpuSeconds();
           		const int CpuPct = Now > PrevAt ? (int)( ( Cpu - PrevCpu ) / ( Now - PrevAt ) * 100.0 + 0.5 ) : 0;
           		PrevAt = Now; PrevCpu = Cpu;
@@ -1154,6 +1248,9 @@ jobs:
           mark(E/"Core/Src/UnMisc.cpp", "\t// Command line.\n\t#if _MSC_VER", "appInit> log table built")
           mark(E/"Core/Src/UnName.cpp", "\t#include \"UnNames.h\"\n", "FName::StaticInit> registering hardcoded names...")
           mark(E/"Core/Src/UnName.cpp", "\t// Verify no duplicate names.\n", "FName::StaticInit> hardcoded names registered, checking duplicates...")
+          # last crash was a signal right after "GMalloc = InMalloc;": print what GMalloc actually is before the virtual call
+          sub(E/"Core/Src/UnMisc.cpp", "\tGMalloc->Init();\n",
+              '#ifdef PLATFORM_IOS\n\t{ char M[240]; void** Vt = GMalloc ? *(void***)GMalloc : 0; snprintf( M, sizeof(M), "appInit> about to call GMalloc->Init(): GMalloc=%p vtable=%p", (void*)GMalloc, (void*)Vt ); UE1IOSLogTagged( "init", M ); }\n#endif\n\tGMalloc->Init();\n', count=1)
           # the very first debugf() opens System/UnrealTournament.log: trace that too
           FOD = E/"Core/Inc/FOutputDeviceFile.h"
           sub(FOD, "\t\t\t\t\t// Open log file.\n",
