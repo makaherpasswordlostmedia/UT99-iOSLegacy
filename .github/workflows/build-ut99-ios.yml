@@ -310,7 +310,7 @@ jobs:
           //   [sdl]    SDL_Log messages, with category + priority names
           //   [life]   app lifecycle + memory warnings (the usual reason an old iPad silently dies while loading)
           //   [hb]     heartbeat: silent time, CPU %, resident memory, main-loop liveness and a hang/busy verdict
-          //   [hang]   when silent >= 10 s: 3 samples of the main thread's call stack (function+offset) = where it is stuck
+          //   [hang]   when silent >= 3 s: 3 samples of the main thread's call stack (function+offset) = where it is stuck
           //   [CRASH]  fatal signals / uncaught exceptions / std::terminate, with backtrace and the last log line
           //
           // Session handling:
@@ -621,7 +621,7 @@ jobs:
           		LogLine( "hb", B, false );
           #ifdef UE_CAN_SAMPLE
           		static int Samples = 0;
-          		if( Silent >= 10.0 && Samples < 10 )
+          		if( Silent >= 3.0 && Samples < 12 )
           		{
           			Samples++;
           			for( int s = 0; s < 3; s++ )
@@ -1115,17 +1115,51 @@ jobs:
           sub(FOD, "\t\t\t\tif( GLogHook )\n\t\t\t\t\tGLogHook->Serialize( Data, Event );",
               '#if defined(PLATFORM_IOS) && !UNICODE\n\t\t\t\tif( Event!=NAME_Title )\n\t\t\t\t{\n\t\t\t\t\tchar Msg[1200]; snprintf( Msg, sizeof(Msg), "%s: %s", FName::SafeString(Event), Data ? Data : "" );\n\t\t\t\t\tUE1IOSLogTagged( "engine", Msg );\n\t\t\t\t}\n#endif\n\t\t\t\tif( GLogHook )\n\t\t\t\t\tGLogHook->Serialize( Data, Event );', count=1)
 
-          # ---------------------------------------------------------------- 4c. appInit checkpoints -> ut99_ios.log (tag "init")
-          # The first iPad log stopped at "before appInit" with CPU busy and 11 MB resident: a spin inside appInit.
-          UM = E/"Core/Src/UnMisc.cpp"
-          def ck(anchor, msg):
-              sub(UM, anchor, anchor + '\n#ifdef PLATFORM_IOS\n\tUE1IOSLogTagged( "init", "' + msg + '" );\n#endif', count=1)
-          ck("\tguard(appInit);\n", "appInit: entered")
-          ck("\tGMalloc->Init();\n", "appInit: allocator ready")
-          ck("\tFName::StaticInit();\n", "appInit: FName::StaticInit done")
-          ck("\tGFileManager->SetDefaultDirectory( appBaseDir() );\n", "appInit: cwd set to base dir")
-          ck("\tGConfig->Init( GIni, GUserIni, RequireConfig );\n", "appInit: config loaded")
-          ck("\tUObject::StaticInit();\n", "appInit: UObject::StaticInit done")
+          # ---------------------------------------------------------------- 4c. statement-level trace of the engine start-up -> ut99_ios.log (tag "init")
+          # The first iPad logs stopped inside appInit (CPU busy, 11 MB resident). Instead of guessing, EVERY top-level statement of
+          # appInit / FName::StaticInit / UObject::StaticInit / UObject::ProcessRegistrants now logs "<func>> <statement>" after it ran,
+          # so the last "init" line in the log is the last statement that finished and the next one in the source is where it is stuck.
+          def trace_func(path, header_rx, tag, must=True):
+              p = pathlib.Path(path)
+              if not p.exists():
+                  if must: problems.append(f"trace: missing file {path}")
+                  return
+              t = rd(p)
+              m = re.search(header_rx, t)
+              if not m:
+                  if must: problems.append(f"trace: function not found: {tag}")
+                  return
+              start = m.end()
+              end = t.index("\n}\n", start)
+              out, n = [], 0
+              for ln in t[start:end].split("\n"):
+                  out.append(ln)
+                  s = ln.strip()
+                  if (ln.startswith("\t") and not ln.startswith("\t\t") and s.endswith(";")
+                          and not s.startswith(("//", "#", "/*", "return", "unguard", "break", "continue", "goto"))
+                          and ln.count("(") == ln.count(")") and ln.count("{") == ln.count("}")):
+                      txt = s[:60].replace("\\", "/").replace('"', "'").replace("%", "pct")
+                      out.append('#ifdef PLATFORM_IOS\n\tUE1IOSLogTagged( "init", "%s> %s" );\n#endif' % (tag, txt))
+                      n += 1
+              wr(p, t[:start] + "\n".join(out) + t[end:])
+              print(f"trace: {tag}: {n} checkpoints")
+          trace_func(E/"Core/Src/UnMisc.cpp", r"CORE_API void appInit\([^\n]*\)\n\{\n", "appInit")
+          trace_func(E/"Core/Src/UnName.cpp", r"void FName::StaticInit\(\)\n\{\n", "FName::StaticInit")
+          trace_func(E/"Core/Src/UnObj.cpp", r"void UObject::StaticInit\(\)\n\{\n", "UObject::StaticInit")
+          trace_func(E/"Core/Src/UnObj.cpp", r"void UObject::ProcessRegistrants\(\)\n\{\n", "ProcessRegistrants")
+          # markers that sit inside / before the loops, which the per-statement trace cannot reach
+          def mark(path, anchor, msg):
+              sub(path, anchor, '#ifdef PLATFORM_IOS\n\tUE1IOSLogTagged( "init", "' + msg + '" );\n#endif\n' + anchor, count=1)
+          mark(E/"Core/Src/UnMisc.cpp", "\t// Init log table.\n", "appInit> CRC table built")
+          mark(E/"Core/Src/UnMisc.cpp", "\t// Command line.\n\t#if _MSC_VER", "appInit> log table built")
+          mark(E/"Core/Src/UnName.cpp", "\t#include \"UnNames.h\"\n", "FName::StaticInit> registering hardcoded names...")
+          mark(E/"Core/Src/UnName.cpp", "\t// Verify no duplicate names.\n", "FName::StaticInit> hardcoded names registered, checking duplicates...")
+          # the very first debugf() opens System/UnrealTournament.log: trace that too
+          FOD = E/"Core/Inc/FOutputDeviceFile.h"
+          sub(FOD, "\t\t\t\t\t// Open log file.\n",
+              '#ifdef PLATFORM_IOS\n\t\t\t\t\t{ char M[1200]; snprintf( M, sizeof(M), "FOutputDeviceFile: opening %s", Filename ); UE1IOSLogTagged( "init", M ); }\n#endif\n\t\t\t\t\t// Open log file.\n', count=1)
+          sub(FOD, "\t\t\t\t\telse Dead = 1;\n",
+              '\t\t\t\t\telse Dead = 1;\n#ifdef PLATFORM_IOS\n\t\t\t\t\tUE1IOSLogTagged( "init", LogAr ? "FOutputDeviceFile: log file opened" : "FOutputDeviceFile: log file open FAILED" );\n#endif\n', count=1)
 
           # ---------------------------------------------------------------- 5. NSDLClient: iOS SDL hints
           sub(E/"NSDLDrv/Src/NSDLClient.cpp", r'([ \t]*if \( SDL_Init\( SDL_INIT_VIDEO)',
